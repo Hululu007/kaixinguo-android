@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.5.0] - 2026-11-24
+
 ### 修复
 
 - 红果服务端从 11 月 23 日起不再接受原来的签名，所有剧集又打不开了（提示「这一集暂时无法匿名播放」）。更新签名后已恢复，升级后打开剧集就能看
@@ -76,7 +78,8 @@
 - 投屏只能用系统的屏幕镜像
 - HarmonyOS NEXT（纯血鸿蒙）不能直接安装 APK
 
-[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.4.1...HEAD
+[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/kadaliao/kaixinguo-android/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/kadaliao/kaixinguo-android/compare/v0.3.0...v0.3.1

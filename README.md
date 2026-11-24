@@ -25,6 +25,7 @@
 - **沉浸式播放**：视频铺满屏幕，上滑下一集、下滑上一集，点画面暂停；顶部切倍速、搜别的剧，「⋯」里调清晰度、定时关闭
 - **长按倍速**：按住画面 2 倍速播放，松手恢复；按住时下滑锁定 2 倍速，之后再按住上滑取消
 - **弹幕**：精选弹幕从画面上方飘过，跟着进度走，暂停时停住；「⋯」里可以关掉
+- **签名服务**：可以填一个自己部署的签名服务，红果改签名校验、内置签名播不了时，播放改用它取地址（见[常见问题](#常见问题)）
 - **画中画**：播放时回到桌面，视频缩到小窗里继续放；点小窗回到播放页，关掉小窗就停
 - **锁屏和通知栏**：显示剧名、集数和封面，可以暂停、拖动、换集；熄屏也能接着听
 - **平板和折叠屏**：宽屏时标签栏换到左侧，播放页右边是选集面板，支持外接键盘
@@ -122,6 +123,7 @@ adb shell am start -a android.intent.action.VIEW -d "kaixinguo://search?q=重生
 | 收藏 | `files/favorites.json` |
 | 离开时在哪（页面、正在放的剧） | `files/session.json` |
 | 匿名设备 | `no_backup/openhongguo/anonymous.json`，不参与系统备份 |
+| 签名服务的设置（填了才有） | `no_backup/signer.json`，走签名服务的匿名设备在 `no_backup/openhongguo/anonymous-signer.json`，都不参与系统备份 |
 | 封面和推荐缓存 | `cache/` |
 
 ## 常见问题
@@ -140,6 +142,9 @@ adb shell am start -a android.intent.action.VIEW -d "kaixinguo://search?q=重生
 
 **能投屏到电视吗？**
 视频是在手机上边下边解密的，电视拿不到解密后的地址，只能用系统的「无线投屏 / 屏幕镜像」。
+
+**所有剧都打不开，提示「这一集暂时无法匿名播放」？**
+多半是红果服务端改了签名校验，SDK 的内置签名一时跟不上，要等开心果发新版。等不及的话，可以自己部署一个 [openhongguo-signer](https://github.com/beilunyang/openhongguo/tree/main/signer) 签名服务（做法见[部署签名服务](https://github.com/kadaliao/kaixinguo/blob/main/docs/signer.md)），在「我的」右上角的设置里填上它的地址（如 `https://signer.example.com`）和 token。之后内置签名播不了时，开心果会改用签名服务取播放地址，其他请求不经过它；不需要时把地址清空。开心果不提供公共的签名服务。
 
 **加载失败或者播放卡住？**
 调试版（`./gradlew installDebug`）会把每个请求打印到 logcat：`adb logcat -s kxg sdk`，提 issue 时附上。

@@ -82,6 +82,13 @@ class FakeCatalog : Catalog {
         val pages = danmaku[episodeId] ?: return DanmakuPage()
         return pages[options.cursor.orEmpty()] ?: throw OpenhongguoException(ErrorCode.TRANSPORT, "lost")
     }
+
+    /** The signing service playback falls back to, as the model last set it. */
+    var signer: Pair<String, String>? = null
+
+    override fun useSigner(url: String, token: String) {
+        signer = if (url.isEmpty()) null else url to token
+    }
 }
 
 /** FakeVideo plays nothing, and does at once what it is told. */

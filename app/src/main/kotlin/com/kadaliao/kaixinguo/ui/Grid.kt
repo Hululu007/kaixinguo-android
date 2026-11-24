@@ -14,6 +14,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -120,13 +121,14 @@ private fun flatBar() = TopAppBarDefaults.topAppBarColors(
     scrolledContainerColor = MaterialTheme.colorScheme.background,
 )
 
-/** Page is a tab's own page: its title in a bar, over what it shows. */
+/** Page is a tab's own page: its title in a bar, with what the bar's end holds, over what it shows. */
 @Composable
-fun Page(title: String, content: @Composable BoxScope.() -> Unit) {
+fun Page(title: String, actions: @Composable RowScope.() -> Unit = {}, content: @Composable BoxScope.() -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
+                actions = actions,
                 colors = flatBar(),
             )
         },

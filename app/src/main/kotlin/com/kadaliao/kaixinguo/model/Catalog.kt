@@ -41,10 +41,24 @@ interface Catalog {
     suspend fun shortRank(query: ShortRankQuery): ShortRanking
     suspend fun resolvePlayback(episodeId: String): PlaybackResult
     suspend fun listDanmaku(seriesId: String, episodeId: String, options: DanmakuOptions): DanmakuPage
+
+    /** Has playback fall back to the signing service at url, or to none when url is empty. */
+    fun useSigner(url: String, token: String) {}
 }
 
-/** SdkCatalog is the catalog of the openhongguo client. */
-class SdkCatalog(private val client: OpenhongguoClient) : Catalog {
+/**
+ * SdkCatalog is the catalog of the openhongguo client, which signs with the
+ * SDK's built-in signing. Playback alone can fall back to a client that
+ * signs with a signing service, which `signed` makes for its address and
+ * token.
+ */
+class SdkCatalog(
+    client: OpenhongguoClient,
+    private val signed: (url: String, token: String) -> OpenhongguoClient,
+) : Catalog {
+    private val signer = SignerFallback(client)
+    private val client get() = signer.local
+
     override suspend fun discover(options: DiscoverOptions) = client.discover(options)
     override suspend fun search(query: String, options: SearchOptions) = client.search(query, options)
     override suspend fun suggest(prefix: String) = client.suggest(prefix)
@@ -55,9 +69,13 @@ class SdkCatalog(private val client: OpenhongguoClient) : Catalog {
     override suspend fun listEpisodes(seriesId: String, options: EpisodeOptions) = client.listEpisodes(seriesId, options)
     override suspend fun seasons(seriesId: String) = client.seasons(seriesId)
     override suspend fun shortRank(query: ShortRankQuery) = client.shortRank(query)
-    override suspend fun resolvePlayback(episodeId: String) = client.resolvePlayback(episodeId)
+    override suspend fun resolvePlayback(episodeId: String) = signer.call { it.resolvePlayback(episodeId) }
     override suspend fun listDanmaku(seriesId: String, episodeId: String, options: DanmakuOptions) =
         client.listDanmaku(seriesId, episodeId, options)
+
+    override fun useSigner(url: String, token: String) {
+        signer.setRemote(if (url.isEmpty()) null else signed(url, token))
+    }
 }
 
 /** Says what went wrong in the viewer's words. */
@@ -71,6 +89,7 @@ fun friendly(error: Throwable?): String {
             ErrorCode.AUTHENTICATION_REQUIRED -> "这一集需要登录才能观看"
             ErrorCode.CONTENT_UNAVAILABLE, ErrorCode.ALBUM_UNAVAILABLE -> "内容已下架或不存在"
             ErrorCode.CHALLENGE_REQUIRED, ErrorCode.DEVICE_REJECTED -> "服务器暂时拒绝了请求，请稍后再试"
+            ErrorCode.SIGNER_UNAVAILABLE -> "连不上签名服务，请稍后再试"
             else -> error.message.orEmpty()
         }
     }

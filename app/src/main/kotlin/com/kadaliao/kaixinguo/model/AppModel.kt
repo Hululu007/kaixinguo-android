@@ -32,6 +32,8 @@ class AppModel(
     val cacheDir: File,
     val scope: CoroutineScope,
     video: Video,
+    /** Where the signing service's settings are kept: they hold its token, so out of backups. */
+    private val signerFile: File = File(dataDir, "signer.json"),
     streams: Streams,
 ) {
     val history = History(dataDir)
@@ -92,6 +94,44 @@ class AppModel(
         player.chooseSpeed(s.speed)
         s.quality?.let(player::chooseQuality)
         player.chooseDanmaku(s.danmaku)
+    }
+
+    // MARK: - The signing service
+
+    /** The signing service playback falls back to when the built-in signing stops working; empty for none. */
+    var signer by mutableStateOf(SignerSettings.load(signerFile))
+        private set
+
+    init {
+        if (!signer.isEmpty) {
+            try {
+                catalog.useSigner(signer.url, signer.token)
+            } catch (e: Exception) {
+                debugLog { "signer: $e" }
+            }
+        }
+    }
+
+    /** Checks a signing service before it is saved; the tests' answers without the network. */
+    var probe: suspend (String, String) -> String? = ::probeSigner
+
+    /** A form to edit the signing service with, as it is saved now. */
+    fun signerForm() = SignerForm(signer, probe, ::useSigner)
+
+    /** Saves the signing service and has playback fall back to it; null when that worked, else what went wrong. */
+    fun useSigner(s: SignerSettings): String? {
+        try {
+            s.save(signerFile)
+        } catch (e: Exception) {
+            return "保存失败：${e.message}"
+        }
+        try {
+            catalog.useSigner(s.url, s.token)
+        } catch (e: Exception) {
+            return "签名服务的地址用不了：${friendly(e)}"
+        }
+        signer = s
+        return null
     }
 
     /** Writes what is waiting to be saved, as the app leaves the screen. */

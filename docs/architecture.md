@@ -55,6 +55,7 @@ flowchart LR
 | `model/Store.kt` | JSON 文件存储、观看记录、收藏 | `Store.swift` |
 | `model/Session.kt` | 离开应用时在哪：标签页、页面栈、搜索、榜单和日期、倍速和清晰度、弹幕开关、播放页上的那一集 | 无 |
 | `model/Catalog.kt` | 对 SDK 的抽象（测试里换成假的）、错误文案 | `Catalog.swift` |
+| `model/Signer.kt` | 签名服务：播放取址在内置签名失效时改用签名服务、设置的读写和检查 | `signer.go`（macOS） |
 | `covers/CoverStore.kt` | 封面：下载、缩小、磁盘缓存、内存缓存 | `CoverStore.swift` |
 | `MainActivity.kt` | 窗口、`kaixinguo://` 链接、画中画、离开时暂停、回来时接着放 | `KaixinguoApp.swift` |
 | `ui/App.kt`、`ui/Router.kt` | 标签页（手机底栏、平板侧栏）、每个标签的页面栈 | `RootView.swift`、`Router.swift` |
@@ -62,6 +63,7 @@ flowchart LR
 | `ui/CatalogScreens.kt` | 推荐、排行榜、新剧上线、搜索、热搜、我的 | `CatalogViews.swift` |
 | `ui/SeriesScreen.kt` | 剧集详情 | `SeriesView.swift` |
 | `ui/PlayerScreen.kt` | 播放页（顶栏、进度条、手势、弹幕、播放页里的搜索）、选集面板 | `PlayerScreen.swift` |
+| `ui/Settings.kt` | 设置（「我的」右上角）：签名服务的地址和 token | `settings.go`（macOS） |
 
 ## 线程模型
 
@@ -147,6 +149,8 @@ flowchart LR
 | `files/favorites.json` | 收藏，最近收藏的在前 | `Favorites` |
 | `files/session.json` | 离开应用时在哪，下次打开回到那里；只有 Android 版有 | `AppModel`、`Router` |
 | `no_backup/openhongguo/anonymous.json` | SDK 注册的匿名设备，不参与备份 | openhongguo |
+| `no_backup/openhongguo/anonymous-signer.json` | 走签名服务的那个客户端注册的匿名设备，和上面的分开，一边重置设备不影响另一边；没设签名服务时没有 | openhongguo |
+| `no_backup/signer.json` | 设置里的签名服务地址和 token，不参与备份；没设时没有 | `AppModel` |
 | `cache/home.json` | 推荐页第一页 | `AppModel` |
 | `cache/covers/` | 封面 JPEG | `CoverStore` |
 
@@ -159,13 +163,24 @@ flowchart LR
 
 字段一旦发布就要保持兼容：只能加字段，不能改名或删除，新字段解码时要有默认值。
 
+## 签名服务
+
+红果服务端改签名校验时，SDK 的内置签名会失效，播放取不到地址（`ANONYMOUS_LIMITED` 或 `SIGNATURE_REJECTED`），要等 SDK 发新版。用户可以在设置里填一个自己部署的 openhongguo-signer，规则和 macOS 版一样：
+
+- 默认只用内置签名，应用里不带任何签名服务的地址。
+- 只有播放取址（`resolvePlayback`）会改用签名服务；推荐、搜索、分集、弹幕这些请求一律走内置签名，「搜不到」之类正常的空结果不会去问签名服务。
+- 先问内置签名；它失败、签名服务拿到了结果，之后 30 分钟先问签名服务，过后再先问内置签名。先问签名服务时它连不上（`SIGNER_UNAVAILABLE`）或同样失败，就再问内置签名，内置签名成功就不再优先签名服务。
+- 两边都失败时，给用户看内置签名的错误，不显示签名服务的错误。
+- 签名服务的客户端用自己的设备文件（`anonymous-signer.json`），保存设置后立刻换上新的客户端，不用重启应用。
+- 保存前先检查：`GET /ready` 要返回 200 和 `"ready":true`，再 `POST /feature-hash`（空请求，带上 token）要返回 400，401 说明 token 不对。检查没过时显示原因，再点一次「仍然保存」照样保存。Android 不允许应用自己用明文的 `http://`，所以填 `http://` 地址时检查不了，但 SDK 自己的连接不受这个限制，保存后照样能用；建议用 `https://`。
+
 ## 测试
 
 ```sh
 ./gradlew testDebugUnitTest
 ```
 
-- **逻辑测试**（`model/CatalogTest.kt`、`model/SessionTest.kt`、`model/DanmakuTest.kt`）用 `FakeCatalog` 和 `FakeVideo` 代替 SDK 和 ExoPlayer，不联网，用协程测试的虚拟时间跑重试和定时关闭：分页和去重、缓存合并、自动重试、搜索回退和补封面、选季和续播、播放状态、长按倍速、定时关闭、弹幕的加载和分道、观看记录和收藏的读写（包括 Go 写的文件）、离开再回来和重新启动后回到原处。
+- **逻辑测试**（`model/CatalogTest.kt`、`model/SessionTest.kt`、`model/DanmakuTest.kt`、`model/SignerTest.kt`）用 `FakeCatalog` 和 `FakeVideo` 代替 SDK 和 ExoPlayer，不联网，用协程测试的虚拟时间跑重试和定时关闭：分页和去重、缓存合并、自动重试、搜索回退和补封面、选季和续播、播放状态、长按倍速、定时关闭、弹幕的加载和分道、观看记录和收藏的读写（包括 Go 写的文件）、离开再回来和重新启动后回到原处、播放在内置签名和签名服务之间的切换、签名服务的检查（在本机起一个假的服务）和设置的保存。
 - **解密测试**（`cenc/CencTest.kt`）在测试里从零拼出加密的 MP4（用 JDK 自己的 CTR 模式加密，不拿解密器验证自己），覆盖 senc、子样本、saiz/saio、moov 在文件末尾等情况，整段和任意切片解密结果必须一致。
 
 拿一集真实的加密剧集和 Go 版的输出逐字节比较：

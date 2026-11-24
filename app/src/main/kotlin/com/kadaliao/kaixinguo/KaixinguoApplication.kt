@@ -47,12 +47,22 @@ class KaixinguoApplication : Application() {
         video = ExoVideo(this, streams, http)
         covers = CoverStore(File(cacheDir, "covers"))
         try {
-            val client = OpenhongguoClient.create(
-                this,
-                ClientOptions(retryAttempts = 3, deviceResets = 3, logger = if (debug) { m -> Log.d("sdk", m) } else null),
-            )
+            val options = ClientOptions(retryAttempts = 3, deviceResets = 3, logger = if (debug) { m -> Log.d("sdk", m) } else null)
+            val client = OpenhongguoClient.create(this, options)
+            // The client for the signing service has a device of its own, so
+            // a device reset on one does not overwrite the other's.
+            val catalog = SdkCatalog(client) { url, token ->
+                OpenhongguoClient.create(
+                    File(noBackupFilesDir, "openhongguo/anonymous-signer.json"),
+                    options.copy(signerUrl = url, signerToken = token.ifEmpty { null }),
+                )
+            }
             val scope = MainScope()
-            model = AppModel(SdkCatalog(client), filesDir, cacheDir, scope, video, streams).also { m ->
+            model = AppModel(
+                catalog, filesDir, cacheDir, scope, video,
+                signerFile = File(noBackupFilesDir, "signer.json"),
+                streams = streams,
+            ).also { m ->
                 m.artwork = covers::jpeg
                 // The app opens where the viewer left it: the tab and pages
                 // now, the player as the first window opens. Where they are

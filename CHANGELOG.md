@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.5.1] - 2026-11-24
+
 ### 变更
 
 - 弹幕进出画面时淡入淡出，不再一下子冒出来、一下子消失；字再细一点、更透一些，描边压淡、加了一层淡阴影，压在画面上更不显眼
@@ -86,7 +88,8 @@
 - 投屏只能用系统的屏幕镜像
 - HarmonyOS NEXT（纯血鸿蒙）不能直接安装 APK
 
-[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.0...HEAD
+[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/kadaliao/kaixinguo-android/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.3.1...v0.4.0

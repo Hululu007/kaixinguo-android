@@ -77,7 +77,9 @@ android {
 }
 
 dependencies {
-    implementation(libs.openhongguo)
+    // The fork's aar comes without a POM, so its one dependency is listed here.
+    implementation(libs.openhongguo) { artifact { type = "aar" } }
+    implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)

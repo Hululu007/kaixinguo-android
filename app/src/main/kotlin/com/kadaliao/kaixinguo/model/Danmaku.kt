@@ -23,11 +23,11 @@ private const val GAP = 2f
 /** How long a comment may wait for a lane, in ms, before it is dropped. */
 private const val MAX_WAIT_MS = 1500L
 
-/** How long a comment takes to fade in as it comes in at the right edge, in ms of the episode. */
-private const val FADE_IN_MS = 220f
+/** How far a comment comes in past the right edge as it fades in, in ems. */
+private const val FADE_IN = 1f
 
-/** How long it takes to fade out as it leaves at the left edge, in ms of the episode. */
-private const val FADE_OUT_MS = 600f
+/** How far it has still to go off the left edge when it starts to fade out, in ems. */
+private const val FADE_OUT = 2.5f
 
 /**
  * About how wide the text is, in ems, erring wide: Chinese and the like an
@@ -55,14 +55,6 @@ internal fun ems(text: String): Float {
  * edge and has gone past the left.
  */
 class Flight(val comment: Comment, val lane: Int, val width: Float, val enter: Long, val leave: Long)
-
-/**
- * How much of the comment shows `ms` into the episode, 0 to 1: it fades in
- * as it comes in at the right edge and out as it goes off the left, so
- * comments turn up and leave softly, and none is a bright thing suddenly.
- */
-internal fun Flight.alpha(ms: Long): Float =
-    minOf((ms - enter) / FADE_IN_MS, (leave - ms) / FADE_OUT_MS).coerceIn(0f, 1f)
 
 /**
  * Lanes is where an episode's comments fly over a screen `screen` ems wide,
@@ -109,4 +101,15 @@ class Lanes(comments: List<Comment>, val screen: Float, lanes: Int = LANE_COUNT)
             each(i, screen - (ms - f.enter) * screen / CROSSING_MS)
         }
     }
+
+    /**
+     * How much of the comment shows with its left edge `x` ems from the
+     * screen's, 0 to 1: it fades in over its first em past the right edge,
+     * and out as its end nears the left edge, gone just as the last of it
+     * is. It goes by where the comment is rather than by time, so a fade
+     * takes the same stretch of screen on a phone as on a wide tablet, and
+     * the room behind a comment, after it is off the screen, takes no part.
+     */
+    fun alpha(f: Flight, x: Float): Float =
+        minOf((screen - x) / FADE_IN, (x + f.width) / FADE_OUT).coerceIn(0f, 1f)
 }

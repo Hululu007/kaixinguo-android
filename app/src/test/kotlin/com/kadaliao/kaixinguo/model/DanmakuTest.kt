@@ -59,6 +59,33 @@ class DanmakuTest {
     }
 
     /**
+     * A comment fades in over its first em past the right edge and is fully
+     * there across the middle; it fades out over the last 2.5 ems of its end
+     * nearing the left edge, gone just as all of it is off the screen, and
+     * not later, in the room after it.
+     */
+    @Test
+    fun fades() {
+        // 20 ems wide, a comment 8 ems wide: it comes in at 0 and is all off the left at 9800 ms.
+        val l = Lanes(listOf(Comment("一二三四五六七八", 0)), 20f)
+        val f = l.flights.single()
+        fun alpha(ms: Long): Float {
+            var a = 0f
+            l.at(ms) { i, x -> a = l.alpha(l.flights[i], x) }
+            return a
+        }
+        assertEquals(0f, alpha(0), 0f)
+        assertEquals(0.5f, alpha(175), 0.001f)
+        assertEquals(1f, alpha(350), 0f)
+        assertEquals(1f, alpha(5000), 0f)
+        assertEquals(1f, alpha(8925), 0.001f) // its end 2.5 ems from the left edge
+        assertEquals(0.5f, alpha(9362), 0.01f)
+        assertEquals(0f, alpha(9800), 0.001f)
+        assertEquals(0f, alpha(10_000), 0f) // past it, though still in its lane's room
+        assertTrue(10_000 < f.leave)
+    }
+
+    /**
      * An episode's comments come a stretch at a time, past stretches with
      * none, each once and on one line; starting the episode again asks for
      * nothing more, and another episode's take their place.

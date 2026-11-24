@@ -126,6 +126,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -166,7 +167,6 @@ import com.kadaliao.kaixinguo.model.Lanes
 import com.kadaliao.kaixinguo.model.Player
 import com.kadaliao.kaixinguo.model.PlayerState
 import com.kadaliao.kaixinguo.model.Sleep
-import com.kadaliao.kaixinguo.model.alpha
 import com.kadaliao.kaixinguo.model.favLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -632,8 +632,12 @@ private suspend fun AwaitPointerEventScope.louden(down: PointerInputChange, hud:
     }
 }
 
-/** The comments' text: a modest size, light and well see-through, so they sit over the video without hiding it. */
-private val danmakuStyle = TextStyle(color = Color.White.copy(alpha = 0.6f), fontSize = 14.sp, fontWeight = FontWeight.Thin)
+/**
+ * The comments' text: a modest size, light and see-through, so they sit
+ * over the video without hiding it. Light rather than thinner, and no more
+ * see-through than this, so they still read over snow or a white wall.
+ */
+private val danmakuStyle = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp, fontWeight = FontWeight.Light)
 
 /**
  * DanmakuLayer flies the episode's comments right to left across the top
@@ -666,19 +670,20 @@ private fun DanmakuLayer(modifier: Modifier) {
             val lane = em * 1.6f
             val lanes = Lanes(comments, size.width / em)
             val texts = arrayOfNulls<TextLayoutResult>(lanes.flights.size) // each measured as it first shows
-            val edge = Stroke(width = 0.8.dp.toPx(), join = StrokeJoin.Round)
-            val edgeColor = Color.Black.copy(alpha = 0.18f)
+            val edge = Stroke(width = 1.dp.toPx(), join = StrokeJoin.Round)
+            val edgeColor = Color.Black.copy(alpha = 0.3f)
             val glow = Shadow(color = Color.Black.copy(alpha = 0.28f), blurRadius = 2f * density)
             onDrawBehind {
                 val ms = now
                 if (ms < 0) return@onDrawBehind
                 lanes.at(ms) { i, x ->
                     val f = lanes.flights[i]
+                    val alpha = lanes.alpha(f, x)
+                    if (alpha <= 0f) return@at // just in at the right edge, or off the left
                     val text = texts[i] ?: measurer.measure(f.comment.text, danmakuStyle, softWrap = false, maxLines = 1).also { texts[i] = it }
                     val at = Offset(x * em, f.lane * lane + (lane - text.size.height) / 2)
-                    val alpha = f.alpha(ms)
                     drawText(text, edgeColor, at, alpha = alpha, drawStyle = edge)
-                    drawText(text, topLeft = at, alpha = alpha, shadow = glow)
+                    drawText(text, topLeft = at, alpha = alpha, shadow = glow, drawStyle = Fill) // left out, the text keeps the edge's stroke and comes out hollow
                 }
             }
         },

@@ -1,19 +1,27 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 
 package com.kadaliao.kaixinguo.ui
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.provider.Settings
 import android.view.OrientationEventListener
+import android.view.Window
+import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -33,6 +41,7 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,13 +54,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -64,7 +75,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeMute
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.BrightnessHigh
+import androidx.compose.material.icons.filled.BrightnessLow
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.GridView
@@ -101,7 +118,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -115,7 +135,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -128,6 +147,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
@@ -139,8 +159,10 @@ import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -155,6 +177,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -169,6 +192,7 @@ import com.kadaliao.kaixinguo.model.PlayerState
 import com.kadaliao.kaixinguo.model.Sleep
 import com.kadaliao.kaixinguo.model.favLabel
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.ZoneId
@@ -179,9 +203,11 @@ import kotlin.math.roundToInt
 /**
  * PlayerScreen is the episode playing, its video filling the screen: what
  * plays and how fast above it, the episodes below it on phones and beside
- * it on tablets. Swiping up goes on to the next episode, and down back to
- * the one before; sideways sets the brightness on the left half and the
- * volume on the right. In picture in picture only the video shows.
+ * it on tablets. Swiping up in the middle goes on to the next episode, and
+ * down back to the one before; up and down on the left sets the brightness,
+ * and on the right the volume. A while after the last touch, as the video
+ * plays, all but the video fades away, the system bars too; a tap brings it
+ * back. In picture in picture only the video shows.
  */
 @Composable
 fun PlayerScreen(inPip: Boolean) {
@@ -196,8 +222,10 @@ fun PlayerScreen(inPip: Boolean) {
     var resumeAfterSearch by remember { mutableStateOf(false) }
     val hud = remember { PlayerHud() }
     val rotation = rememberRotation()
-    // The little window shows the video as it is, and the dimming doesn't come back with the screen.
-    LaunchedEffect(inPip) { if (inPip) hud.brightness = 1f }
+    val brightness = rememberBrightness()
+    // The little window shows at the screen's own brightness.
+    LaunchedEffect(inPip) { if (inPip) brightness?.restore() }
+    BoostEnds(player)
 
     // Pauses the episode for a search, to go on with it after.
     fun openSearch() {
@@ -214,38 +242,44 @@ fun PlayerScreen(inPip: Boolean) {
 
     BackHandler(enabled = !inPip) { if (searching) closeSearch(null) else player.leave() }
     PlayerWindow(
-        hideBars = landscape || inPip,
+        hideBars = landscape || inPip || !hud.chrome,
         keepOn = !player.paused && (player.state == PlayerState.Playing || player.state == PlayerState.Buffering),
     )
+    if (!inPip) ChromeTimer(hud, busy = showEpisodes || searching)
     PlayerTheme {
         val keys = remember { FocusRequester() }
         LaunchedEffect(searching) { if (!searching) runCatching { keys.requestFocus() } }
-        Box(
-            Modifier.fillMaxSize().background(Color.Black)
-                .focusRequester(keys).focusable()
-                .onPreviewKeyEvent { e -> !searching && e.type == KeyEventType.KeyDown && playerKey(player, e.key) },
-        ) {
-            // One layout for all, so the video keeps its place, and its
-            // surface, as the device turns or picture in picture starts.
-            Row(Modifier.fillMaxSize()) {
-                Column(Modifier.weight(1f).fillMaxHeight()) {
-                    VideoArea(hud, edge = landscape || panel, chrome = !inPip, rotation = rotation, landscape = landscape, search = ::openSearch, modifier = Modifier.weight(1f).fillMaxWidth())
-                    if (!inPip && !landscape && !panel) EpisodeBar { showEpisodes = true }
-                }
-                if (!inPip && panel) {
-                    EpisodePanel(
-                        Modifier.width(320.dp).fillMaxHeight().background(Color(0xFF171717))
-                            .windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Vertical + WindowInsetsSides.End)),
-                        steps = true,
-                    )
-                }
-            }
-            AnimatedVisibility(
-                visible = searching && !inPip,
-                enter = slideInHorizontally(tween(250)) { it },
-                exit = slideOutHorizontally(tween(250)) { it },
+        // Upright, the bars come and go with the controls: laid out as if they showed, nothing moves.
+        CompositionLocalProvider(LocalSteadyBars provides !landscape) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black)
+                    .focusRequester(keys).focusable()
+                    .onPreviewKeyEvent { e -> !searching && e.type == KeyEventType.KeyDown && playerKey(player, e.key).also { if (it) hud.poke() } },
             ) {
-                PlayerSearch(::closeSearch)
+                // One layout for all, so the video keeps its place, and its
+                // surface, as the device turns or picture in picture starts.
+                Row(Modifier.fillMaxSize()) {
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                        VideoArea(hud, brightness, edge = landscape || panel, chrome = !inPip, rotation = rotation, landscape = landscape, search = ::openSearch, modifier = Modifier.weight(1f).fillMaxWidth())
+                        if (!inPip && !landscape && !panel) {
+                            Chrome(hud, tapToShow = true) { EpisodeBar { showEpisodes = true } }
+                        }
+                    }
+                    if (!inPip && panel) {
+                        EpisodePanel(
+                            Modifier.width(320.dp).fillMaxHeight().background(Color(0xFF171717))
+                                .windowInsetsPadding(systemBars().only(WindowInsetsSides.Vertical + WindowInsetsSides.End)),
+                            steps = true,
+                        )
+                    }
+                }
+                AnimatedVisibility(
+                    visible = searching && !inPip,
+                    enter = slideInHorizontally(tween(250)) { it },
+                    exit = slideOutHorizontally(tween(250)) { it },
+                ) {
+                    PlayerSearch(::closeSearch)
+                }
             }
         }
         if (showEpisodes && !inPip) {
@@ -294,6 +328,106 @@ private fun PlayerWindow(hideBars: Boolean, keepOn: Boolean) {
     DisposableEffect(keepOn) {
         view.keepScreenOn = keepOn
         onDispose { view.keepScreenOn = false }
+    }
+}
+
+/** Whether the player lays itself out as if the system bars showed, so that they come and go with the controls, moving nothing. */
+private val LocalSteadyBars = compositionLocalOf { false }
+
+/** The status bar's insets, as the player lays itself out. */
+@Composable
+private fun statusBars(): WindowInsets = if (LocalSteadyBars.current) WindowInsets.statusBarsIgnoringVisibility else WindowInsets.statusBars
+
+/** The navigation bar's insets, as the player lays itself out. */
+@Composable
+private fun navigationBars(): WindowInsets = if (LocalSteadyBars.current) WindowInsets.navigationBarsIgnoringVisibility else WindowInsets.navigationBars
+
+/** The system bars' insets, as the player lays itself out. */
+@Composable
+private fun systemBars(): WindowInsets = if (LocalSteadyBars.current) WindowInsets.systemBarsIgnoringVisibility else WindowInsets.systemBars
+
+/**
+ * The player screen's [Brightness], which puts the screen's own back as the
+ * player closes.
+ */
+@Composable
+private fun rememberBrightness(): Brightness? {
+    val window = LocalActivity.current?.window ?: return null
+    val context = LocalContext.current
+    val brightness = remember(window) { Brightness(window, context) }
+    DisposableEffect(brightness) { onDispose { brightness.restore() } }
+    return brightness
+}
+
+/**
+ * Brightness sets how bright the screen is while the player shows: the
+ * window's own brightness, which needs no permission and holds only while
+ * the app is on screen, so the system's is left as it was.
+ */
+private class Brightness(private val window: Window, private val context: Context) {
+    /** How bright the screen is now, from 0 to 1: the player's, or the system's until a swipe sets it. */
+    fun level(): Float {
+        val b = window.attributes.screenBrightness
+        if (b >= 0f) return b
+        val system = runCatching { Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS) }.getOrNull() ?: return 0.5f
+        return (system / 255f).coerceIn(0f, 1f)
+    }
+
+    fun set(v: Float) {
+        // Not quite 0, which some screens take as off.
+        window.attributes = window.attributes.apply { screenBrightness = v.coerceIn(0.01f, 1f) }
+    }
+
+    /** Lets the screen follow the system's brightness again. */
+    fun restore() {
+        if (window.attributes.screenBrightness < 0f) return
+        window.attributes = window.attributes.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
+    }
+}
+
+/**
+ * Volume sets the system's media volume from a swipe, the one its buttons
+ * set, without the system's panel; past the system's loudest, the player
+ * turns the episode up itself ([Player.chooseBoost]).
+ */
+private class Volume(private val audio: AudioManager, private val player: Player) {
+    private val stream = AudioManager.STREAM_MUSIC
+    private val min = audio.getStreamMinVolume(stream)
+    private val max = audio.getStreamMaxVolume(stream)
+
+    /** Whether the volume can't be set here, as on some devices with a fixed one. */
+    val fixed: Boolean get() = max <= min || audio.isVolumeFixed
+
+    private val system: Float get() = (audio.getStreamVolume(stream) - min).toFloat() / (max - min)
+
+    /** The volume now, from 0 to [Player.BOOST_LIMIT]. */
+    fun level(): Float {
+        if (player.boost > 1f && system < 1f) player.chooseBoost(1f) // turned down meanwhile
+        return if (player.boost > 1f) player.boost else system
+    }
+
+    fun set(v: Float) {
+        val to = (min + v.coerceAtMost(1f) * (max - min)).roundToInt().coerceIn(min, max)
+        if (to != audio.getStreamVolume(stream)) runCatching { audio.setStreamVolume(stream, to, 0) } // no system panel: the player's says it
+        player.chooseBoost(v.coerceAtLeast(1f))
+    }
+}
+
+/** BoostEnds turns the sound back to the system's loudest as its buttons, or anything else, turn the volume down. */
+@Composable
+private fun BoostEnds(player: Player) {
+    val context = LocalContext.current
+    DisposableEffect(context, player) {
+        val audio = context.getSystemService(AudioManager::class.java)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+                val s = AudioManager.STREAM_MUSIC
+                if (audio != null && player.boost > 1f && audio.getStreamVolume(s) < audio.getStreamMaxVolume(s)) player.chooseBoost(1f)
+            }
+        }
+        // Not a public broadcast, but every Android sends it; without it the turning down waits for the next swipe.
+        ContextCompat.registerReceiver(context, receiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"), ContextCompat.RECEIVER_NOT_EXPORTED)
+        onDispose { context.unregisterReceiver(receiver) }
     }
 }
 
@@ -359,10 +493,28 @@ private class Rotation(private val activity: Activity) {
 
 /**
  * PlayerHud is what the fingers on the video are doing, for what shows over
- * it: a press and hold as it goes, the video following a swipe, and a word
- * on what the last one did.
+ * it: whether the controls show, a press and hold as it goes, the video
+ * following a swipe, the brightness or volume one sets, and a word on what
+ * the last one did.
  */
 private class PlayerHud {
+    /** Whether the controls over the video show: they fade a while after the last touch as the video plays, and a tap brings them back. */
+    var chrome by mutableStateOf(true)
+
+    /**
+     * How many touches on the video and its controls have ended, each
+     * keeping the controls a while longer; and what keeps them while it
+     * goes on: a finger along the progress bar, a menu open.
+     */
+    var touches by mutableIntStateOf(0)
+    var scrubbing by mutableStateOf(false)
+    var menus by mutableIntStateOf(0)
+
+    /** The brightness or volume a swipe at the side sets, while it shows; and whether the swipe goes on. */
+    var level by mutableStateOf<Level?>(null)
+    var adjusting = false
+    var levelJob: Job? = null // hides the level a moment after the swipe
+
     var holding by mutableStateOf(false)
 
     /** Whether the held finger has swiped far enough that letting go flips the lock. */
@@ -371,20 +523,26 @@ private class PlayerHud {
     /** How far the video has followed a swipe up or down, in pixels. */
     var offset by mutableFloatStateOf(0f)
 
-    /**
-     * How bright the video shows, from 0 to 1: below 1 a dark layer covers
-     * it, so the system's brightness, and its permission, are left alone.
-     * It lasts while the player is open, upright or on its side.
-     */
-    var brightness by mutableFloatStateOf(1f)
-
     /** What the last gesture did, or couldn't, said for a moment. */
     var toast by mutableStateOf<Toast?>(null)
 
     fun say(text: String) {
         toast = Toast(text)
     }
+
+    fun showChrome() {
+        chrome = true
+    }
+
+    /** Keeps the controls a while longer, after a touch on them; or brings them back. */
+    fun poke() {
+        touches++
+        showChrome()
+    }
 }
+
+/** A level a swipe at the side of the video sets: the brightness from 0 to 1, or the volume from 0 to [Player.BOOST_LIMIT]. */
+private data class Level(val volume: Boolean, val value: Float)
 
 /** A word for a moment; each one shows anew, the same words or not. */
 private class Toast(val text: String)
@@ -398,39 +556,96 @@ private val shadowed = TextStyle(shadow = Shadow(Color.Black.copy(alpha = 0.4f),
  * goes down to the bottom of the screen too, with no episode bar below.
  */
 @Composable
-private fun VideoArea(hud: PlayerHud, edge: Boolean, chrome: Boolean, rotation: Rotation?, landscape: Boolean, search: () -> Unit, modifier: Modifier) {
+private fun VideoArea(hud: PlayerHud, brightness: Brightness?, edge: Boolean, chrome: Boolean, rotation: Rotation?, landscape: Boolean, search: () -> Unit, modifier: Modifier) {
     Box(modifier.clipToBounds()) {
         VideoSurface(Modifier.fillMaxSize().offset { IntOffset(0, hud.offset.roundToInt()) })
         if (!chrome) return@Box
-        // Over the video alone; read as it draws, so a slide doesn't recompose the controls.
-        Spacer(
-            Modifier.fillMaxSize().drawBehind {
-                if (hud.brightness < 1f) drawRect(Color.Black, alpha = (1f - hud.brightness) * MAX_DIM)
-            },
-        )
         // Under the controls and below the top bar's row; it goes with the video as a swipe moves it.
         DanmakuLayer(
             Modifier.fillMaxSize().offset { IntOffset(0, hud.offset.roundToInt()) }
-                .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
+                .windowInsetsPadding(statusBars().union(WindowInsets.displayCutout).only(WindowInsetsSides.Top))
                 .padding(top = 52.dp),
         )
-        Gestures(hud, Modifier.fillMaxSize())
+        Gestures(hud, brightness, Modifier.fillMaxSize())
         PauseMark(Modifier.align(Alignment.Center))
         PlayerOverlay()
         Column(Modifier.fillMaxSize()) {
-            TopBar(rotation, landscape, search)
+            Chrome(hud) { TopBar(hud, rotation, landscape, search) }
             SpeedHint(hud)
             Spacer(Modifier.weight(1f))
             // With nothing under the video, the bar keeps clear of the system's.
-            ProgressBar(
-                if (edge) {
-                    Modifier.windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-                } else {
-                    Modifier
+            Chrome(hud) {
+                ProgressBar(
+                    hud,
+                    if (edge) {
+                        Modifier.windowInsetsPadding(navigationBars().union(WindowInsets.displayCutout).only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                    } else {
+                        Modifier
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Chrome shows the controls in it, or fades them, as [PlayerHud.chrome]
+ * says, keeping their place so that nothing else moves. Faded, they are
+ * gone, and touches where they were go to the video; `tapToShow`, off the
+ * video, a tap there brings them back.
+ */
+@Composable
+private fun Chrome(hud: PlayerHud, tapToShow: Boolean = false, content: @Composable () -> Unit) {
+    val shown = hud.chrome
+    val alpha = animateFloatAsState(if (shown) 1f else 0f, tween(if (shown) 200 else 300), label = "chrome")
+    val gone by remember { derivedStateOf { !hud.chrome && alpha.value == 0f } }
+    var height by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    Box(
+        Modifier.fillMaxWidth()
+            .then(if (gone) Modifier.height(with(density) { height.toDp() }) else Modifier.onSizeChanged { height = it.height })
+            .graphicsLayer { this.alpha = alpha.value },
+    ) {
+        if (!gone) content()
+        // While they fade, a tap on them brings them back rather than doing what they do.
+        if (!shown && (tapToShow || !gone)) {
+            Box(
+                Modifier.matchParentSize().pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false).consume()
+                        hud.poke()
+                    }
                 },
             )
         }
     }
+}
+
+/** How long the controls stay after the last touch, as the video plays. */
+private const val CHROME_FOR = 4000L
+
+/**
+ * ChromeTimer fades the controls once the video has played on a while
+ * untouched, and brings them back as it pauses or fails. It is a
+ * composable of its own so that each touch, which starts it again,
+ * recomposes nothing else. With TalkBack on they stay.
+ */
+@Composable
+private fun ChromeTimer(hud: PlayerHud, busy: Boolean) {
+    val player = LocalModel.current.player
+    val context = LocalContext.current
+    val talkBack = remember(context) { context.getSystemService(AccessibilityManager::class.java)?.isTouchExplorationEnabled == true }
+    val playing = player.state == PlayerState.Playing && !player.paused
+    val swiping by remember { derivedStateOf { hud.offset != 0f } }
+    val held = busy || talkBack || hud.holding || hud.level != null || hud.scrubbing || hud.menus > 0 || swiping
+    LaunchedEffect(hud.touches, hud.chrome, playing, held) {
+        if (!hud.chrome || !playing || held) return@LaunchedEffect
+        delay(CHROME_FOR)
+        hud.chrome = false
+    }
+    val stopped = player.state is PlayerState.Failed ||
+        (player.paused && (player.state == PlayerState.Playing || player.state == PlayerState.Buffering))
+    LaunchedEffect(stopped) { if (stopped) hud.showChrome() }
 }
 
 /** VideoSurface shows the video, fitted to its frame, black around it. */
@@ -459,16 +674,17 @@ private sealed interface Touch {
 }
 
 /**
- * Gestures reads the fingers on the video: a tap pauses, a swipe up or down
- * moves between episodes, one sideways sets the brightness or the volume,
- * and a press and hold plays at double speed.
+ * Gestures reads the fingers on the video: a tap brings back the controls,
+ * or with them showing pauses; a swipe up or down moves between episodes in
+ * the middle third, and sets the brightness on the left third and the
+ * volume on the right; a press and hold plays at double speed.
  */
 @Composable
-private fun Gestures(hud: PlayerHud, modifier: Modifier) {
+private fun Gestures(hud: PlayerHud, brightness: Brightness?, modifier: Modifier) {
     val player = LocalModel.current.player
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
-    val audio = remember(context) { context.getSystemService(AudioManager::class.java) }
+    val volume = remember(context, player) { context.getSystemService(AudioManager::class.java)?.let { Volume(it, player) } }
     val scope = rememberCoroutineScope()
     Box(
         modifier.pointerInput(Unit) {
@@ -487,14 +703,28 @@ private fun Gestures(hud: PlayerHud, modifier: Modifier) {
                     }
                     t
                 }
+                val x = down.position.x
                 when {
                     touch == null -> hold(down, player, hud, haptic)
-                    touch == Touch.Up -> player.togglePause()
-                    touch is Touch.Moved && abs(touch.by.y) > abs(touch.by.x) -> swipe(down, player, hud, scope)
-                    down.position.x < size.width / 2 -> brighten(down, hud)
-                    audio != null -> louden(down, hud, audio)
-                    else -> untilUp(down)
+                    touch == Touch.Up -> if (hud.chrome) {
+                        player.togglePause()
+                        hud.poke()
+                    } else {
+                        hud.showChrome()
+                    }
+                    touch is Touch.Moved && abs(touch.by.y) <= abs(touch.by.x) -> untilUp(down) // sideways: nothing
+                    x < size.width / 3 -> if (brightness != null) adjust(down, hud, haptic, scope, false, brightness::level, brightness::set) else untilUp(down)
+                    x > size.width * 2 / 3 -> when {
+                        volume == null -> untilUp(down)
+                        volume.fixed -> {
+                            hud.say("这台设备的音量不能调")
+                            untilUp(down)
+                        }
+                        else -> adjust(down, hud, haptic, scope, true, volume::level, volume::set)
+                    }
+                    else -> swipe(down, player, hud, scope)
                 }
+                hud.touches++
             }
         },
     )
@@ -584,51 +814,45 @@ private suspend fun AwaitPointerEventScope.swipe(down: PointerInputChange, playe
     }
 }
 
-/** How dark the layer over the video gets at brightness 0, so the picture never goes quite black. */
-private const val MAX_DIM = 0.8f
-
-/** How far a finger has slid sideways from where it went down, as a fraction of the width; null once it lifts. */
-private suspend fun AwaitPointerEventScope.slid(down: PointerInputChange): Float? {
-    val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return null
-    if (!c.pressed) return null
-    c.consume()
-    return (c.position.x - down.position.x) / size.width
-}
-
 /**
- * Sliding sideways on the left half dims the video, or brings it back: to
- * the right is brighter, and a slide across the whole width goes from dark
- * to full.
+ * Sets the brightness, or the volume, as the finger goes up or down: up is
+ * more, and a swipe most of the way up the video goes from none to full.
+ * The volume goes on past the system's loudest, to [Player.BOOST_LIMIT],
+ * with a tick as it passes it.
  */
-private suspend fun AwaitPointerEventScope.brighten(down: PointerInputChange, hud: PlayerHud) {
-    val from = hud.brightness
-    while (true) {
-        val by = slid(down) ?: return
-        hud.brightness = (from + by).coerceIn(0f, 1f)
-        hud.say("亮度 ${(hud.brightness * 100).roundToInt()}%")
-    }
-}
-
-/**
- * Sliding sideways on the right half sets the system's media volume, the
- * one its buttons set: to the right is louder, and a slide across the whole
- * width goes from silent to full.
- */
-private suspend fun AwaitPointerEventScope.louden(down: PointerInputChange, hud: PlayerHud, audio: AudioManager) {
-    val stream = AudioManager.STREAM_MUSIC
-    val min = audio.getStreamMinVolume(stream)
-    val max = audio.getStreamMaxVolume(stream)
-    if (max <= min || audio.isVolumeFixed) {
-        hud.say("这台设备的音量不能调")
-        untilUp(down)
-        return
-    }
-    val from = audio.getStreamVolume(stream)
-    while (true) {
-        val by = slid(down) ?: return
-        val to = (from + by * (max - min)).roundToInt().coerceIn(min, max)
-        if (to != audio.getStreamVolume(stream)) audio.setStreamVolume(stream, to, 0) // no system panel: the word on the video says it
-        hud.say("音量 ${(to - min) * 100 / (max - min)}%")
+private suspend fun AwaitPointerEventScope.adjust(
+    down: PointerInputChange,
+    hud: PlayerHud,
+    haptic: HapticFeedback,
+    scope: CoroutineScope,
+    volume: Boolean,
+    get: () -> Float,
+    set: (Float) -> Unit,
+) {
+    val span = maxOf(size.height * 0.7f, 240.dp.toPx())
+    val most = if (volume) Player.BOOST_LIMIT else 1f
+    val from = get()
+    hud.levelJob?.cancel()
+    hud.toast = null
+    hud.adjusting = true
+    hud.level = Level(volume, from)
+    try {
+        while (true) {
+            val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+            if (!c.pressed) break
+            c.consume()
+            val v = (from - (c.position.y - down.position.y) / span).coerceIn(0f, most)
+            val was = hud.level?.value ?: from
+            if (volume && (was > 1.001f) != (v > 1.001f)) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            set(v)
+            hud.level = Level(volume, v)
+        }
+    } finally {
+        hud.adjusting = false
+        hud.levelJob = scope.launch {
+            delay(1500)
+            if (!hud.adjusting) hud.level = null
+        }
     }
 }
 
@@ -731,12 +955,12 @@ private fun PlayerOverlay() {
 
 /** TopBar is what plays, and how fast, over the top of the video, with the way out, to turn the screen, to search and to more. */
 @Composable
-private fun TopBar(rotation: Rotation?, landscape: Boolean, search: () -> Unit) {
+private fun TopBar(hud: PlayerHud, rotation: Rotation?, landscape: Boolean, search: () -> Unit) {
     val player = LocalModel.current.player
     Box(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.5f), Color.Transparent)))) {
         Row(
             Modifier.fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .windowInsetsPadding(statusBars().union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
                 .padding(start = 4.dp, end = 4.dp, bottom = 20.dp).height(48.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -749,10 +973,10 @@ private fun TopBar(rotation: Rotation?, landscape: Boolean, search: () -> Unit) 
                     Text(it, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall.merge(shadowed), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            SpeedMenu()
-            if (rotation != null) RotateButton(rotation, landscape)
+            SpeedMenu(hud)
+            if (rotation != null) RotateButton(hud, rotation, landscape)
             IconButton(onClick = search) { Icon(Icons.Filled.Search, contentDescription = "搜索", tint = Color.White) }
-            MoreMenu()
+            MoreMenu(hud)
         }
     }
 }
@@ -764,10 +988,13 @@ private fun TopBar(rotation: Rotation?, landscape: Boolean, search: () -> Unit) 
  * always a way back, even to a series shot upright.
  */
 @Composable
-private fun RotateButton(rotation: Rotation, landscape: Boolean) {
+private fun RotateButton(hud: PlayerHud, rotation: Rotation, landscape: Boolean) {
     val player = LocalModel.current.player
     if (LocalConfiguration.current.smallestScreenWidthDp >= 600 || !(player.wide || rotation.held == true)) return
-    IconButton(onClick = { rotation.turn(landscape = !landscape) }) {
+    IconButton(onClick = {
+        rotation.turn(landscape = !landscape)
+        hud.poke()
+    }) {
         Icon(Icons.Filled.ScreenRotation, contentDescription = if (landscape) "竖屏观看" else "横屏观看", tint = Color.White)
     }
 }
@@ -778,11 +1005,21 @@ private fun rateText(r: Float): String = if (r == r.toInt().toFloat()) "${r.toIn
 /** What going back from double speed says: to the speed the viewer chose. */
 private fun restoring(rate: Float): String = if (rate == 1f) "恢复正常速度" else "恢复 ${rateText(rate)} 倍速"
 
+/** Keeps the controls while a menu of theirs is open. */
+@Composable
+private fun HoldsChrome(hud: PlayerHud, open: Boolean) {
+    DisposableEffect(open) {
+        if (open) hud.menus++
+        onDispose { if (open) hud.menus-- }
+    }
+}
+
 /** SpeedMenu shows the speed the video plays at, and changes it. */
 @Composable
-private fun SpeedMenu() {
+private fun SpeedMenu(hud: PlayerHud) {
     val player = LocalModel.current.player
     var open by remember { mutableStateOf(false) }
+    HoldsChrome(hud, open)
     Box {
         Row(
             Modifier.clip(CircleShape).clickable { open = true }.height(44.dp).padding(horizontal = 8.dp),
@@ -825,12 +1062,13 @@ private enum class More { MAIN, SPEED, QUALITY, SLEEP }
  * page.
  */
 @Composable
-private fun MoreMenu() {
+private fun MoreMenu(hud: PlayerHud) {
     val model = LocalModel.current
     val router = LocalRouter.current
     val player = model.player
     var open by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(More.MAIN) }
+    HoldsChrome(hud, open)
     Box {
         IconButton(onClick = {
             page = More.MAIN
@@ -943,7 +1181,7 @@ private fun clock(s: Double): String {
 
 /** ProgressBar is how far the episode has got, along the bottom of the video; dragging along it moves there. */
 @Composable
-private fun ProgressBar(modifier: Modifier) {
+private fun ProgressBar(hud: PlayerHud, modifier: Modifier) {
     val video = LocalModel.current.player.video
     var dragged by remember { mutableStateOf<Float?>(null) } // where a drag is, as a fraction
     var at by remember { mutableDoubleStateOf(0.0) }
@@ -977,11 +1215,17 @@ private fun ProgressBar(modifier: Modifier) {
                     val down = awaitFirstDown()
                     down.consume()
                     dragged = (down.position.x / size.width).coerceIn(0f, 1f)
-                    while (true) {
-                        val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                        if (!c.pressed) break
-                        c.consume()
-                        dragged = (c.position.x / size.width).coerceIn(0f, 1f)
+                    hud.scrubbing = true
+                    try {
+                        while (true) {
+                            val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                            if (!c.pressed) break
+                            c.consume()
+                            dragged = (c.position.x / size.width).coerceIn(0f, 1f)
+                        }
+                    } finally {
+                        hud.scrubbing = false
+                        hud.poke()
                     }
                     val f = dragged ?: return@awaitEachGesture
                     video.seek(f * total)
@@ -1028,7 +1272,52 @@ private fun SpeedHint(hud: PlayerHud) {
                 SwipeHint(locked, hud.swiped, player.baseRate)
             }
         }
-        if (!hud.holding && toast != null) Pill(toast.text)
+        val level = hud.level
+        if (!hud.holding && level != null) LevelHint(level) else if (!hud.holding && toast != null) Pill(toast.text)
+    }
+}
+
+/**
+ * LevelHint shows the brightness or the volume a swipe up or down at the
+ * side of the video sets, as it goes: the volume past 100% in orange, and a
+ * mark where the system's loudest ends.
+ */
+@Composable
+private fun LevelHint(level: Level) {
+    val most = if (level.volume) Player.BOOST_LIMIT else 1f
+    val over = level.value > 1.001f
+    val v = level.value
+    val icon = when {
+        !level.volume -> if (v < 0.5f) Icons.Filled.BrightnessLow else Icons.Filled.BrightnessHigh
+        v < 0.01f -> Icons.AutoMirrored.Filled.VolumeOff
+        v < 0.34f -> Icons.AutoMirrored.Filled.VolumeMute
+        v < 0.67f -> Icons.AutoMirrored.Filled.VolumeDown
+        else -> Icons.AutoMirrored.Filled.VolumeUp
+    }
+    Row(
+        Modifier.clip(CircleShape).background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = if (level.volume) "音量" else "亮度", tint = Color.White, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Canvas(Modifier.width(140.dp).height(10.dp)) {
+            val h = 6.dp.toPx()
+            val y = (size.height - h) / 2
+            drawRoundRect(Color.White.copy(alpha = 0.25f), Offset(0f, y), Size(size.width, h), CornerRadius(h / 2))
+            drawRoundRect(if (over) Color(0xFFFF9F0A) else Color.White, Offset(0f, y), Size(size.width * (v / most), h), CornerRadius(h / 2))
+            if (most > 1f) {
+                val x = size.width / most
+                drawRect(Color.White.copy(alpha = 0.7f), Offset(x - 0.75.dp.toPx(), 0f), Size(1.5.dp.toPx(), size.height))
+            }
+        }
+        Text(
+            "${(v * 100).roundToInt()}%",
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(48.dp),
+        )
     }
 }
 
@@ -1080,7 +1369,7 @@ private fun SwipeHint(locked: Boolean, swiped: Boolean, base: Float) {
 private fun EpisodeBar(open: () -> Unit) {
     val total = LocalModel.current.player.page?.episodes?.size ?: 0
     Row(
-        Modifier.navigationBarsPadding().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
+        Modifier.windowInsetsPadding(navigationBars()).padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 4.dp)
             .fillMaxWidth().height(44.dp).clip(MaterialTheme.shapes.medium).background(Color(0xFF262626))
             .clickable(onClick = open).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,

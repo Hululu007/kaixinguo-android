@@ -72,11 +72,31 @@ interface Video {
     fun play()
     fun pause()
     fun seek(seconds: Double)
+
+    /**
+     * How far the sound is turned up past the system's loudest, from 1 to
+     * [Player.BOOST_LIMIT]; 1 plays it as loud as the system does.
+     */
+    var boost: Float
 }
 
 /** Streams makes an episode's file on the CDN playable, decrypting it with its key, and returns its URI. */
 fun interface Streams {
     fun register(sources: List<String>, key: ByteArray?): String
+
+    /**
+     * Registers the file like [register], and reads its first `bytes`
+     * ahead in the background, decrypted, so that it starts at once when
+     * it plays. A read ahead that fails leaves the file to try again as it
+     * plays.
+     */
+    fun preload(sources: List<String>, key: ByteArray?, bytes: Long): String = register(sources, key)
+
+    /** Whether the URI still plays: only the last few files are kept. */
+    fun has(uri: String): Boolean = true
+
+    /** Lets the file go, and what was read ahead of it. */
+    fun drop(uri: String) {}
 }
 
 sealed interface PlayerState {
@@ -113,6 +133,17 @@ class Player internal constructor(
 
         /** The speed a press and hold on the video plays at. */
         const val DOUBLE_RATE = 2f
+
+        /** The most the sound goes past the system's loudest, as a gain. */
+        const val BOOST_LIMIT = 1.5f
+
+        /**
+         * How long an episode plays before the next one's start is read
+         * ahead, in ticks of 3 seconds; and how much of it, in seconds of
+         * video.
+         */
+        const val PRELOAD_AFTER = 3
+        const val PRELOAD_SECONDS = 20
     }
 
     var seriesID by mutableStateOf<String?>(null)
@@ -182,6 +213,10 @@ class Player internal constructor(
     var danmaku by mutableStateOf(emptyList<Comment>())
         private set
 
+    /** How far the sound is turned up past the system's loudest, from 1 to [BOOST_LIMIT]. */
+    var boost by mutableFloatStateOf(video.boost)
+        private set
+
     private var start = 0.0 // where to start, in seconds
     private var gen = 0 // tells this start from later ones
     private var pending = false // waits for the series to load
@@ -191,6 +226,12 @@ class Player internal constructor(
     private var ticker: Job? = null
     private var danmakuFor = "" // the episode whose comments are here, or on their way
     private var danmakuJob: Job? = null
+    private var played = 0 // ticks of 3 seconds the episode has played
+
+    /** The next episode's file, its start read ahead as this one plays. */
+    private class Preloaded(val episodeID: String, val url: String, val uri: String)
+
+    private var preloaded: Preloaded? = null
 
     /** Future is an episode's playback model being resolved, shared by the start of the episode and the prefetch before it. */
     private class Future {
@@ -266,6 +307,7 @@ class Player internal constructor(
             return
         }
         state = PlayerState.Resolving
+        played = 0
         sp.reveal(number)
         record(sp, number, start, 0.0, finished = false)
         loadDanmaku(sp.id, ep.id)
@@ -318,6 +360,29 @@ class Player internal constructor(
      */
     private fun makeItem(r: PlaybackResult, sp: SeriesPage, ep: Episode): VideoItem {
         val pb = r.playback
+        val (s, sources, key) = stream(r)
+        val p = preloaded
+        val uri = if (p != null && p.episodeID == ep.id && p.url == s.url && streams.has(p.uri)) {
+            preloaded = null
+            p.uri // its start read ahead as the episode before played
+        } else {
+            streams.register(sources, key)
+        }
+        debugLog { "play: ${ep.id} ${s.definition} ${s.codec} encrypted=${key != null} preloaded=${p?.uri == uri}" }
+        qualities = playable(pb.streams).map(::lines).toSortedSet().sortedDescending()
+        quality = lines(s)
+        if (s.width > 0 && s.height > 0) wide = s.width > s.height
+        val series = sp.series
+        val cover = series?.coverUrl.orEmpty()
+        return VideoItem(uri, ep.id, series?.title.orEmpty(), "第 ${ep.number} 集", app.artwork(cover), cover)
+    }
+
+    /**
+     * The stream of the model to play, nearest the definition the viewer
+     * picked: where to fetch it, and the key that decrypts it.
+     */
+    private fun stream(r: PlaybackResult): Triple<Stream, List<String>, ByteArray?> {
+        val pb = r.playback
         val s = pickStream(pb.streams, preferredQuality) ?: throw AppError("这一集没有可以播放的视频")
         if (s.hls || s.dash || pb.audioUrl.isNotEmpty()) throw AppError("暂不支持这种视频格式")
         var key: ByteArray? = null
@@ -328,14 +393,7 @@ class Player internal constructor(
         }
         val sources = mutableListOf(s.url.trim())
         if (s.backupUrl.isNotBlank() && s.backupUrl != s.url) sources += s.backupUrl.trim()
-        val uri = streams.register(sources, key)
-        debugLog { "play: ${ep.id} ${s.definition} ${s.codec} encrypted=${key != null}" }
-        qualities = playable(pb.streams).map(::lines).toSortedSet().sortedDescending()
-        quality = lines(s)
-        if (s.width > 0 && s.height > 0) wide = s.width > s.height
-        val series = sp.series
-        val cover = series?.coverUrl.orEmpty()
-        return VideoItem(uri, ep.id, series?.title.orEmpty(), "第 ${ep.number} 集", app.artwork(cover), cover)
+        return Triple(s, sources, key)
     }
 
     /** Lets the episode go, as another starts; `keep` leaves it on screen, paused, until the next replaces it. */
@@ -576,7 +634,11 @@ class Player internal constructor(
         }
     }
 
-    /** Records where the viewer is every 3 seconds while the video plays. */
+    /**
+     * Records where the viewer is every 3 seconds while the video plays,
+     * and once the episode has played a while, reads the start of the next
+     * one ahead.
+     */
     private fun tick(on: Boolean) {
         if (!on) {
             ticker?.cancel()
@@ -588,8 +650,37 @@ class Player internal constructor(
             while (isActive) {
                 delay(3000)
                 progress()
+                if (state == PlayerState.Playing && video.status == TimeControl.PLAYING && ++played >= PRELOAD_AFTER) preloadNext()
             }
         }
+    }
+
+    /**
+     * Reads the start of the episode after this one ahead, decrypted, so
+     * that it starts at once: the next season's first only once its page
+     * has loaded. Its playback model is the one the prefetch resolved; still
+     * on its way, the next tick tries again.
+     */
+    private fun preloadNext() {
+        val sp = page ?: return
+        val (id, n) = app.following(sp, number) ?: return
+        val nsp = app.seriesEntry(id)
+        if (nsp.series == null || nsp.isBook) return
+        val ep = nsp.episode(n)?.takeIf { it.playable } ?: return
+        if (preloaded?.episodeID == ep.id) return
+        val r = resolve(ep).outcome?.getOrNull() ?: return
+        val (s, sources, key) = runCatching { stream(r) }.getOrNull() ?: return
+        preloaded?.let { streams.drop(it.uri) }
+        preloaded = Preloaded(ep.id, s.url, streams.preload(sources, key, preloadBytes(s)))
+        debugLog { "play: reading ${ep.id} ahead" }
+    }
+
+    // MARK: - Louder than loud
+
+    /** Turns the sound up past the system's loudest, up to [BOOST_LIMIT]; 1 for as loud as the system plays it. */
+    fun chooseBoost(b: Float) {
+        video.boost = b.coerceIn(1f, BOOST_LIMIT)
+        boost = video.boost
     }
 
     private fun itemFailed(message: String) {
@@ -675,6 +766,12 @@ fun lines(s: Stream): Int {
  */
 fun watchedEnough(position: Double, duration: Double, finished: Boolean): Boolean =
     finished || (duration > 0 && position >= duration * 0.9)
+
+/** How much of a stream's start to read ahead: some seconds of it at its bitrate, between 2 and 8 MB. */
+fun preloadBytes(s: Stream): Long {
+    if (s.bitrate <= 0) return 4L shl 20
+    return (s.bitrate / 8 * Player.PRELOAD_SECONDS).coerceIn(2L shl 20, 8L shl 20)
+}
 
 /** Whether the model's CDN URLs expire within a minute. */
 fun expired(pb: Playback): Boolean =

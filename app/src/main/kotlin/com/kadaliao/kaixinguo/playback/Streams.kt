@@ -12,20 +12,39 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.UUID
+import java.util.concurrent.Executors
 
 /**
  * StreamRegistry keeps the episodes' files the player may read, by the URI
- * it plays each at. It keeps the last few: the one playing, and one the
- * player may still read.
+ * it plays each at. It keeps the last few: the one playing, one the player
+ * may still read, and the next one, its start read ahead.
  */
 class StreamRegistry(private val http: DataSource.Factory) : Streams {
     private val streams = LinkedHashMap<String, StreamSource>()
 
-    override fun register(sources: List<String>, key: ByteArray?): String {
+    /** Reads files ahead one at a time, off the player's threads. */
+    private val reader = Executors.newSingleThreadExecutor { r -> Thread(r, "kx-preload").apply { isDaemon = true } }
+
+    override fun register(sources: List<String>, key: ByteArray?): String = add(StreamSource(sources, key, http))
+
+    override fun preload(sources: List<String>, key: ByteArray?, bytes: Long): String {
+        val s = StreamSource(sources, key, http)
+        val uri = add(s)
+        reader.execute { s.preload(bytes) }
+        return uri
+    }
+
+    override fun has(uri: String): Boolean = get(uri) != null
+
+    override fun drop(uri: String) {
+        synchronized(this) { streams.remove(uri) }?.dropped = true
+    }
+
+    private fun add(s: StreamSource): String {
         val uri = "$SCHEME://episode/${UUID.randomUUID()}.mp4"
         synchronized(this) {
-            streams[uri] = StreamSource(sources, key, http)
-            while (streams.size > 3) streams.remove(streams.keys.first())
+            streams[uri] = s
+            while (streams.size > 3) streams.remove(streams.keys.first())?.dropped = true
         }
         return uri
     }
@@ -41,7 +60,8 @@ class StreamRegistry(private val http: DataSource.Factory) : Streams {
  * StreamSource is one episode's file on the CDN: a URL and its backup, and
  * the key that decrypts it, or none for a clear file. The first read learns
  * the file's size and, for an encrypted one, its layout; every read after
- * shares them.
+ * shares them. It keeps the file's start, decrypted: the head read to learn
+ * it, and what [preload] adds.
  */
 class StreamSource(val sources: List<String>, private val key: ByteArray?, private val http: DataSource.Factory) {
     class File(val size: Long, val layout: Layout?)
@@ -50,12 +70,26 @@ class StreamSource(val sources: List<String>, private val key: ByteArray?, priva
     @Volatile
     var good = 0
 
+    /** The file from its first byte, decrypted, as far as it has been read; replaced whole, never changed. */
+    @Volatile
+    var prefix = ByteArray(0)
+        private set
+
+    /** Whether the registry has let it go, so reading ahead is no use. */
+    @Volatile
+    var dropped = false
+
     private var file: File? = null
     private var failure: IOException? = null
 
-    /** The file's size and layout, learning them the first time; it blocks, on the player's loading thread. */
+    /**
+     * The file's size and layout, learning them the first time; it blocks,
+     * on the player's loading thread or the one reading ahead. A failure
+     * sticks unless `soft`: a read ahead that failed leaves the episode to
+     * try again as it plays.
+     */
     @Synchronized
-    fun prepare(): File {
+    fun prepare(soft: Boolean = false): File {
         file?.let { return it }
         failure?.let { throw it }
         var last = IOException("没有视频地址")
@@ -68,6 +102,9 @@ class StreamSource(val sources: List<String>, private val key: ByteArray?, priva
                     }
                 }
                 good = i
+                val clear = head.copyOf()
+                layout?.decrypt(clear, 0)
+                if (prefix.isEmpty()) prefix = clear
                 return File(total, layout).also { file = it }
             } catch (e: InterruptedIOException) {
                 throw e // the player gave up on this read: another may try again
@@ -79,8 +116,33 @@ class StreamSource(val sources: List<String>, private val key: ByteArray?, priva
                 last = IOException(e)
             }
         }
-        failure = last
+        if (!soft) failure = last
         throw last
+    }
+
+    /**
+     * Reads the file's first `bytes` ahead, decrypted, so the episode starts
+     * at once when it plays: what the player asks for of them comes from
+     * memory. It blocks; a failure only leaves less read ahead.
+     */
+    fun preload(bytes: Long) {
+        if (dropped) return
+        try {
+            val f = prepare(soft = true)
+            val from = prefix.size.toLong()
+            val to = minOf(f.size, bytes)
+            if (from >= to || dropped) return
+            val got = read(sources[good], from, to - from).first
+            f.layout?.decrypt(got, from)
+            synchronized(this) {
+                if (prefix.size.toLong() == from) prefix += got
+            }
+            debugLog { "stream: read ahead ${prefix.size} bytes" }
+        } catch (e: IOException) {
+            debugLog { "stream: reading ahead: $e" }
+        } catch (e: RuntimeException) {
+            debugLog { "stream: reading ahead: $e" }
+        }
     }
 
     /** Reads `count` bytes of `source` at `offset`, and the file's size. */
@@ -115,10 +177,11 @@ private fun totalSize(headers: Map<String, List<String>>): Long? {
 /**
  * CencDataSource reads an episode registered with [StreamRegistry]: each
  * range the player asks for comes from the CDN, decrypted in place as it
- * streams, so playback starts at once and can seek anywhere. It is the
- * Android counterpart of the iOS app's StreamLoader. A download that breaks
- * off goes on from where it stopped, from the other source when there is
- * one, twice at most.
+ * streams, so playback starts at once and can seek anywhere; as far as the
+ * file's start is in memory, it comes from there. It is the Android
+ * counterpart of the iOS app's StreamLoader. A download that breaks off
+ * goes on from where it stopped, from the other source when there is one,
+ * twice at most.
  */
 class CencDataSource(private val registry: StreamRegistry, private val http: DataSource.Factory) : BaseDataSource(true) {
     class Factory(private val registry: StreamRegistry, private val http: DataSource.Factory) : DataSource.Factory {
@@ -147,7 +210,7 @@ class CencDataSource(private val registry: StreamRegistry, private val http: Dat
         end = if (dataSpec.length == C.LENGTH_UNSET.toLong()) f.size else minOf(f.size, position + dataSpec.length)
         source = s.good
         tries = 0
-        if (position < end) connect()
+        if (position < end && position >= s.prefix.size) connect()
         opened = true
         transferStarted(dataSpec)
         return end - position
@@ -157,6 +220,19 @@ class CencDataSource(private val registry: StreamRegistry, private val http: Dat
         if (length == 0) return 0
         if (position >= end) return C.RESULT_END_OF_INPUT
         val want = minOf(length.toLong(), end - position).toInt()
+        if (upstream == null) {
+            // From memory as far as the start was read; a download once
+            // begun goes on, though more is read ahead meanwhile.
+            val p = stream!!.prefix
+            if (position < p.size) {
+                val n = minOf(want.toLong(), p.size - position).toInt()
+                System.arraycopy(p, position.toInt(), buffer, offset, n)
+                position += n
+                bytesTransferred(n)
+                return n
+            }
+            connect()
+        }
         while (true) {
             val n = try {
                 upstream!!.read(buffer, offset, want)

@@ -42,10 +42,10 @@ flowchart LR
 | 文件 | 负责什么 | 对应 iOS 版 |
 | --- | --- | --- |
 | `cenc/Cenc.kt` | 把 CENC 加密的 MP4 按字节区间还原成明文 | `Sources/CENC/CENC.swift` |
-| `playback/Streams.kt` | `StreamRegistry`、`StreamSource`、`CencDataSource`：按区间下载、解密、交给 ExoPlayer | `StreamLoader.swift` |
-| `playback/ExoVideo.kt` | 唯一的 ExoPlayer，实现 `model.Video` 接口 | `Player.swift` 里的 `AVPlayer` |
+| `playback/Streams.kt` | `StreamRegistry`、`StreamSource`、`CencDataSource`：按区间下载、解密、交给 ExoPlayer；预读文件开头 | `StreamLoader.swift` |
+| `playback/ExoVideo.kt` | 唯一的 ExoPlayer，实现 `model.Video` 接口；音量超过系统最大时的增益 | `Player.swift` 里的 `AVPlayer`、`AudioBoost.swift` |
 | `playback/PlaybackService.kt` | 媒体会话：熄屏播放、通知栏和锁屏控制、上一集 / 下一集按钮 | `MPRemoteCommandCenter` 和后台音频 |
-| `model/Player.kt` | 播放流程：解析播放地址、预取下一集、选流、连播、记录进度、倍速、定时关闭、按集加载弹幕 | `Player.swift` |
+| `model/Player.kt` | 播放流程：解析播放地址、预取和预读下一集、选流、连播、记录进度、倍速、定时关闭、按集加载弹幕 | `Player.swift` |
 | `model/Danmaku.kt` | 弹幕：估算每条的宽度、分道，算出某一时刻每条飘到哪里 | 无 |
 | `model/AppModel.kt` | 全部状态、各页的 fetcher、热搜、首页缓存、剧集页的加载和续播 | `AppModel.swift`、`SeriesPage.swift` |
 | `model/Feed.kt` | 分页加载的列表，去重、自动重试、下拉刷新 | `Feed.swift` |
@@ -62,7 +62,7 @@ flowchart LR
 | `ui/Grid.kt` | 海报网格、卡片、封面、空状态、胶囊、搜索框 | `Grid.swift` |
 | `ui/CatalogScreens.kt` | 推荐、排行榜、新剧上线、搜索、热搜、我的 | `CatalogViews.swift` |
 | `ui/SeriesScreen.kt` | 剧集详情 | `SeriesView.swift` |
-| `ui/PlayerScreen.kt` | 播放页（顶栏、进度条、手势、弹幕、播放页里的搜索）、选集面板 | `PlayerScreen.swift` |
+| `ui/PlayerScreen.kt` | 播放页（顶栏、进度条、控件的隐去、手势、亮度和音量、弹幕、播放页里的搜索）、选集面板 | `PlayerScreen.swift` |
 | `ui/Settings.kt` | 设置（「我的」右上角）：签名服务的地址和 token | `settings.go`（macOS） |
 
 ## 线程模型
@@ -91,6 +91,14 @@ flowchart LR
 3. **登记**：`StreamRegistry.register` 为这一集建一个 `StreamSource`（主地址、备用地址和密钥），换回一个 `kaixinguo-stream://episode/<随机 ID>.mp4` 的地址。登记表只保留最近 3 个。
 4. **播放**：ExoPlayer 通过 `CencDataSource` 要一个个字节区间。第一次被问到时 `StreamSource.prepare` 读文件头 64 KB，用 `Layout.open` 找到 `moov`，算出每个样本的位置和 IV；之后每个区间都从 CDN 取同一区间，边收边原地解密，再交给播放器。下载断开时从断点接着取，换另一个 CDN 地址，最多两次。HTTP 用的是 Media3 的 `DefaultHttpDataSource`。
 5. **回报**：`ExoVideo` 把 ExoPlayer 的状态翻译成 `TimeControl`（暂停、等待、播放），`Player` 据此更新状态，播放时每 3 秒记录进度，播完自动连播下一集或下一季。
+
+### 预读下一集
+
+和 iOS 版一样：`Player.resolve` 在一集开始播放时就取下一集的播放模型（地址和密钥）。这一集正常播放满 3 个 3 秒的周期（约 9 秒，按 `video.status == PLAYING` 计，缓冲和暂停不算）后，`preloadNext` 用 `Streams.preload` 为下一集登记一个 `StreamSource`，在 `StreamRegistry` 自己的后台线程上读文件头、算好解密布局，再把开头约 20 秒（按码率算，2～8 MB）下载下来解密，留在内存里。
+
+- `StreamSource.prefix` 是从第 0 字节起的明文：文件头读来学布局的 64 KB，加上预读的部分。`CencDataSource` 要的区间落在里面的部分直接从内存给，到了末尾再去 CDN 取；已经开始的下载不会因为预读又多了一段而改回内存。
+- 切到下一集时，`makeItem` 看预读的是不是这一集、这一路流（地址一样），登记表里还在不在，是就直接用它的地址，不是就新登记一个。又预读了别的集时，旧的那份 `drop` 掉。下一季的第一集只有在它的剧集页已经加载好时才预读。
+- 预读失败不算数：`prepare(soft = true)` 的失败不记下来，播放时会重新试。
 
 `Cenc.kt` 是 iOS 版 `CENC.swift` 的逐行移植，关键同样是**解密不改变任何字节的位置**：样本原地解密，标记加密的盒子改名成同样长度的明文盒子（`encv` → `hvc1`、`sinf` → `free` 等）。所以明文文件的任意区间就是密文文件同一区间解密后的结果，播放器可以随意拖动。`CencTest` 用 JDK 自带的 AES-CTR 从零拼出加密的 MP4 来验证它。
 
@@ -138,7 +146,10 @@ flowchart LR
 ## 界面
 
 - **导航**：`NavigationSuiteScaffold` 在手机上是底栏，在平板和展开的折叠屏上是侧边栏。每个标签有自己的页面栈（`Router.paths`），`TabHost` 用 `SaveableStateHolder` 给每一页保存状态，切换标签、返回时网格停在原来滚到的地方；页面出栈时状态一并删掉。没有用 Navigation 库。
-- **播放页**盖在所有标签之上（`App` 里的 `AnimatedVisibility`），始终是深色。手势都在 `Gestures` 里：按下后等到长按的时限，期间抬起是点按，移动超过阈值是滑动，都没有就是长按。竖着滑换集；横着滑在左半屏调亮度、右半屏调媒体音量。亮度是盖在视频上的一层黑色，不改系统亮度，只在播放页开着时有效，进画中画时恢复。
+- **播放页**盖在所有标签之上（`App` 里的 `AnimatedVisibility`），始终是深色。手势都在 `Gestures` 里：按下后等到长按的时限，期间抬起是点按，移动超过阈值是滑动，都没有就是长按。竖着滑按手指落下的位置分三份：中间换集，左边调亮度，右边调音量，滑过视频高度的七成从 0 到满；横着滑不做什么。
+- **控件的隐去**：顶栏、进度条、手机竖屏底部的「选集」和系统栏，在视频播放着、4 秒没被碰过时一起淡出（`ChromeTimer`）。`Chrome` 包着每一块：淡出后不再组合里面的内容，只留一块同样高的空白，所以别的东西不动，那里的触摸落到视频上；竖屏时播放页按 `*IgnoringVisibility` 的系统栏留边，系统栏藏起来也不跳。点画面先让它们回来，显示着时点画面才暂停。暂停、出错、开着选集面板、搜索或菜单、按住倍速、调亮度音量、拖进度条时一直显示；TalkBack 开着时不隐去。
+- **亮度**：改的是窗口自己的 `screenBrightness`，不需要权限，只在应用在前台时生效。第一次滑时从系统亮度（`Settings.System.SCREEN_BRIGHTNESS`）开始；离开播放页、进画中画时恢复成跟随系统。
+- **音量**：系统的媒体音量用 `setStreamVolume` 设，不弹系统的音量面板。到 100% 以后系统音量停在最大，再往上由 `Player.chooseBoost` 让 `ExoVideo` 在 ExoPlayer 的音频会话上开一个 `LoudnessEnhancer`，最多 1.5 倍（约 3.5 dB），它自己压住最响的部分，不会削波。系统音量被调低时（`VOLUME_CHANGED_ACTION`，或者下一次滑动时发现）增益回到 1。
 - **返回**：系统返回键先关掉播放页里的搜索，再退出播放，再一层层退出页面栈，最后从其他标签回到「推荐」。
 
 ## 本地数据

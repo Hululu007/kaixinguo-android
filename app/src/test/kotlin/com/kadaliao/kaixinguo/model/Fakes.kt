@@ -99,6 +99,7 @@ class FakeVideo : Video {
     override var wantsToPlay = false
     override var status = TimeControl.PAUSED
     override var speed = 1f
+    override var boost = 1f
     override var listener: VideoListener? = null
     var loaded: VideoItem? = null
 
@@ -143,7 +144,28 @@ fun testModel(
     video: FakeVideo = FakeVideo(),
     cache: File? = null,
     dir: File = tempDir(),
-): AppModel = AppModel(catalog, File(dir, "data"), cache ?: File(dir, "cache"), scope, video) { _, _ -> "kaixinguo-stream://episode/test.mp4" }
+    streams: Streams = Streams { _, _ -> "kaixinguo-stream://episode/test.mp4" },
+): AppModel = AppModel(catalog, File(dir, "data"), cache ?: File(dir, "cache"), scope, video, streams = streams)
+
+/** FakeStreams hands out a URI for each file, and remembers which it was asked to read ahead, and how much. */
+class FakeStreams : Streams {
+    val registered = ArrayList<String>() // the first source of each, in order
+    val preloaded = HashMap<String, Long>() // by URI
+    val dropped = HashSet<String>()
+
+    override fun register(sources: List<String>, key: ByteArray?): String {
+        registered += sources.first()
+        return "kaixinguo-stream://episode/${registered.size}.mp4"
+    }
+
+    override fun preload(sources: List<String>, key: ByteArray?, bytes: Long): String = register(sources, key).also { preloaded[it] = bytes }
+
+    override fun has(uri: String) = uri !in dropped
+
+    override fun drop(uri: String) {
+        dropped += uri
+    }
+}
 
 /** A series of n episodes in the catalog, each of which the server gives. */
 fun FakeCatalog.playable(id: String, n: Int) {

@@ -1,6 +1,7 @@
 package com.kadaliao.kaixinguo.playback
 
 import android.content.Context
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -22,6 +23,8 @@ import com.kadaliao.kaixinguo.model.debugLog
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
+import kotlin.math.log10
+import kotlin.math.roundToInt
 
 /**
  * ExoVideo plays the episodes with ExoPlayer, reading each through
@@ -63,6 +66,12 @@ class ExoVideo(context: Context, registry: StreamRegistry, http: DataSource.Fact
                     aspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                     listener?.aspectChanged(aspect)
                 }
+            }
+
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                enhancer?.let { runCatching { it.release() } }
+                enhancer = null
+                applyBoost()
             }
 
             override fun onEvents(player: Player, events: Player.Events) {
@@ -132,6 +141,31 @@ class ExoVideo(context: Context, registry: StreamRegistry, http: DataSource.Fact
     override fun pause() = exo.pause()
 
     override fun seek(seconds: Double) = exo.seekTo((seconds * 1000).toLong().coerceAtLeast(0))
+
+    override var boost = 1f
+        set(value) {
+            field = value
+            applyBoost()
+        }
+
+    /** What turns the sound up past the system's loudest, made the first time it is; null where the device has none. */
+    private var enhancer: LoudnessEnhancer? = null
+
+    /**
+     * Sets the gain on the player's sound, in millibels: 1.5 times as loud
+     * is 3.5 dB. The enhancer limits the loudest samples rather than
+     * clipping them.
+     */
+    private fun applyBoost() {
+        val mB = if (boost > 1f) (2000 * log10(boost)).roundToInt() else 0
+        if (mB == 0 && enhancer == null) return
+        val e = enhancer ?: runCatching { LoudnessEnhancer(exo.audioSessionId) }
+            .onFailure { debugLog { "exo: no loudness enhancer: $it" } }.getOrNull()?.also { enhancer = it } ?: return
+        runCatching {
+            e.setTargetGain(mB)
+            e.enabled = mB > 0
+        }
+    }
 
     /** The video's picture, as width over height; 9:16 until it is known. Picture in picture follows it. */
     var aspect by mutableFloatStateOf(9f / 16f)

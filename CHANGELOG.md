@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.6.0] - 2026-11-25
+
 ### 新增
 
 - 播放更沉浸：播放几秒不碰屏幕，进度条、顶栏、选集按钮和状态栏、导航栏都隐去；点一下画面显示出来，显示着时再点才暂停。暂停或出错时一直显示
@@ -110,7 +112,8 @@
 - 投屏只能用系统的屏幕镜像
 - HarmonyOS NEXT（纯血鸿蒙）不能直接安装 APK
 
-[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.3...HEAD
+[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.0...v0.5.1

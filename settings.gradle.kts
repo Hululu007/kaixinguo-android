@@ -13,7 +13,9 @@ dependencyResolutionManagement {
         mavenCentral()
         // openhongguo from our fork's GitHub Release, for upstream's unmerged
         // #16 (playback from video_tab when the playback endpoints come back
-        // empty, since 2026-11-24). Only that one module comes from here.
+        // empty, since 2026-11-24) and #25 (x-medusa kept on the legacy
+        // playback request, since 2026-11-25). Only that one module comes
+        // from here.
         // Move back to io.github.beilunyang:openhongguo on Maven Central once
         // upstream ships the fix.
         exclusiveContent {

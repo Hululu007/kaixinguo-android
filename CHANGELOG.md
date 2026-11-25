@@ -4,6 +4,8 @@
 
 ## [未发布]
 
+## [0.7.0] - 2026-11-25
+
 ### 新增
 
 - 支持 Android 电视和电视盒子：同一个 APK 装上后出现在电视桌面，用遥控器选剧、选集和播放。选中的海报和按钮有明显的高亮，从剧集页或播放页返回时停在刚才的位置；播放时确认键暂停，左右键快退快进，上下键去顶栏和选集
@@ -116,7 +118,8 @@
 - 投屏只能用系统的屏幕镜像
 - HarmonyOS NEXT（纯血鸿蒙）不能直接安装 APK
 
-[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.6.0...HEAD
+[未发布]: https://github.com/kadaliao/kaixinguo-android/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/kadaliao/kaixinguo-android/compare/v0.5.1...v0.5.2
